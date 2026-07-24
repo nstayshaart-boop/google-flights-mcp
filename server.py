@@ -87,6 +87,18 @@ def _serialize(result):
     return {"itineraries": itineraries, "count": len(itineraries), "airlines": airlines_meta}
 
 
+def _run_one_way(from_airport, to_airport, date, adults, children, seat, currency):
+    query = create_query(
+        flights=[FlightQuery(date=date, from_airport=from_airport, to_airport=to_airport)],
+        trip="one-way",
+        seat=seat,
+        passengers=Passengers(adults=adults, children=children),
+        currency=currency,
+    )
+    result = get_flights(query)
+    return _serialize(result)
+
+
 @mcp.tool()
 def search_flights(
     from_airport: str,
@@ -100,6 +112,16 @@ def search_flights(
 ) -> dict:
     """Search real Google Flights offers for a route.
 
+    For a one-way search (return_date left empty), returns {itineraries, count, currency}.
+
+    For a round trip (return_date set), Google Flights only exposes outbound-leg data in a
+    single combined round-trip query (the return leg requires a second, separate step on
+    google's own site too). To actually give both directions, this runs two one-way searches
+    (outbound and return) and pairs them up by airline where possible. Returns
+    {round_trip: true, currency, pairs, count}, where each item in `pairs` has
+    `airline`, `total_price` (outbound + return, already scaled for the requested
+    passenger count), `outbound`, and `return` (each an itinerary dict with legs/times/etc).
+
     Args:
         from_airport: 3-letter IATA code of the departure airport, e.g. "LED".
         to_airport: 3-letter IATA code of the arrival airport, e.g. "TBS".
@@ -110,30 +132,65 @@ def search_flights(
         seat: cabin class - one of "economy", "premium-economy", "business", "first".
         currency: 3-letter currency code for prices, e.g. "RUB", "USD", "EUR" (default "RUB").
     """
-    flights = [FlightQuery(date=date, from_airport=from_airport, to_airport=to_airport)]
-    trip = "one-way"
-    if return_date:
-        trip = "round-trip"
-        flights.append(
-            FlightQuery(date=return_date, from_airport=to_airport, to_airport=from_airport)
+    try:
+        if not return_date:
+            out = _run_one_way(from_airport, to_airport, date, adults, children, seat, currency)
+            out["currency"] = currency
+            return out
+
+        outbound = _run_one_way(from_airport, to_airport, date, adults, children, seat, currency)
+        inbound = _run_one_way(to_airport, from_airport, return_date, adults, children, seat, currency)
+    except Exception as e:
+        return {"error": str(e), "round_trip": True, "pairs": [], "count": 0, "currency": currency}
+
+    out_items = outbound.get("itineraries", [])
+    ret_items = inbound.get("itineraries", [])
+
+    pairs = []
+    used_return_idx = set()
+    for o in out_items:
+        o_airline = o.get("airlines", [None])[0]
+        match_idx = None
+        for i, r in enumerate(ret_items):
+            if i in used_return_idx:
+                continue
+            if r.get("airlines", [None])[0] == o_airline:
+                match_idx = i
+                break
+        if match_idx is not None:
+            r = ret_items[match_idx]
+            used_return_idx.add(match_idx)
+            pairs.append(
+                {
+                    "airline": o_airline,
+                    "total_price": o["price"] + r["price"],
+                    "outbound": o,
+                    "return": r,
+                }
+            )
+
+    if not pairs and out_items and ret_items:
+        o = min(out_items, key=lambda x: x["price"])
+        r = min(ret_items, key=lambda x: x["price"])
+        pairs.append(
+            {
+                "airline": None,
+                "note": "no matching airline both ways - cheapest outbound + cheapest return combined",
+                "total_price": o["price"] + r["price"],
+                "outbound": o,
+                "return": r,
+            }
         )
 
-    query = create_query(
-        flights=flights,
-        trip=trip,
-        seat=seat,
-        passengers=Passengers(adults=adults, children=children),
-        currency=currency,
-    )
-
-    try:
-        result = get_flights(query)
-    except Exception as e:
-        return {"error": str(e), "itineraries": [], "count": 0, "currency": currency}
-
-    out = _serialize(result)
-    out["currency"] = currency
-    return out
+    pairs.sort(key=lambda p: p["total_price"])
+    return {
+        "round_trip": True,
+        "currency": currency,
+        "pairs": pairs,
+        "count": len(pairs),
+        "outbound_options_seen": len(out_items),
+        "return_options_seen": len(ret_items),
+    }
 
 
 @mcp.tool()
