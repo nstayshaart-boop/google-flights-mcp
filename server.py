@@ -85,6 +85,7 @@ def search_flights(
     adults: int = 1,
     children: int = 0,
     seat: str = "economy",
+    currency: str = "RUB",
 ) -> dict:
     """Search real Google Flights offers for a route.
 
@@ -96,6 +97,7 @@ def search_flights(
         adults: number of adult passengers (default 1).
         children: number of child passengers (default 0).
         seat: cabin class - one of "economy", "premium-economy", "business", "first".
+        currency: 3-letter currency code for prices, e.g. "RUB", "USD", "EUR" (default "RUB").
     """
     flights = [FlightQuery(date=date, from_airport=from_airport, to_airport=to_airport)]
     trip = "one-way"
@@ -110,14 +112,17 @@ def search_flights(
         trip=trip,
         seat=seat,
         passengers=Passengers(adults=adults, children=children),
+        currency=currency,
     )
 
     try:
         result = get_flights(query)
     except Exception as e:
-        return {"error": str(e), "itineraries": [], "count": 0}
+        return {"error": str(e), "itineraries": [], "count": 0, "currency": currency}
 
-    return _serialize(result)
+    out = _serialize(result)
+    out["currency"] = currency
+    return out
 
 
 @mcp.tool()
