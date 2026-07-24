@@ -23,10 +23,21 @@ def _fmt_date(date_tuple):
 
 
 def _fmt_time(time_tuple):
-    if not time_tuple:
+    # Protobuf/proto3 treats 0 as "unset", so a true 0 (e.g. exactly HH:00
+    # or 00:MM) can arrive as None here. Since a time always has both an
+    # hour and a minute, missing components must be treated as 0, not
+    # dropped - otherwise "22:00" silently becomes "22" and "00:30"
+    # silently becomes "30", which is misleading, not just cosmetic.
+    if time_tuple is None:
         return None
     try:
-        return ":".join(f"{int(x):02d}" for x in time_tuple if x is not None)
+        parts = list(time_tuple)
+        if len(parts) < 2:
+            parts = parts + [0] * (2 - len(parts))
+        hour, minute = parts[0], parts[1]
+        hour = 0 if hour is None else int(hour)
+        minute = 0 if minute is None else int(minute)
+        return f"{hour:02d}:{minute:02d}"
     except Exception:
         return None
 
