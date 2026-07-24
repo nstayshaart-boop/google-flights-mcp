@@ -13,38 +13,66 @@ mcp = FastMCP(
 )
 
 
+def _fmt_date(date_tuple):
+    if not date_tuple:
+        return None
+    try:
+        return "-".join(str(x) for x in date_tuple if x is not None)
+    except Exception:
+        return None
+
+
+def _fmt_time(time_tuple):
+    if not time_tuple:
+        return None
+    try:
+        return ":".join(f"{int(x):02d}" for x in time_tuple if x is not None)
+    except Exception:
+        return None
+
+
+def _serialize_leg(leg):
+    try:
+        return {
+            "from_airport": getattr(leg.from_airport, "code", None),
+            "from_airport_name": getattr(leg.from_airport, "name", None),
+            "to_airport": getattr(leg.to_airport, "code", None),
+            "to_airport_name": getattr(leg.to_airport, "name", None),
+            "departure": {
+                "date": _fmt_date(getattr(leg.departure, "date", None)),
+                "time": _fmt_time(getattr(leg.departure, "time", None)),
+            },
+            "arrival": {
+                "date": _fmt_date(getattr(leg.arrival, "date", None)),
+                "time": _fmt_time(getattr(leg.arrival, "time", None)),
+            },
+            "duration_minutes": getattr(leg, "duration", None),
+            "plane_type": getattr(leg, "plane_type", None),
+        }
+    except Exception as e:
+        return {"error": f"leg parse error: {e}"}
+
+
 def _serialize(result):
     itineraries = []
     for f in result:
-        itineraries.append(
-            {
-                "type": f.type,
-                "price": f.price,
-                "airlines": f.airlines,
-                "carbon_emission_grams": f.carbon.emission if f.carbon else None,
-                "legs": [
-                    {
-                        "from_airport": leg.from_airport.code,
-                        "from_airport_name": leg.from_airport.name,
-                        "to_airport": leg.to_airport.code,
-                        "to_airport_name": leg.to_airport.name,
-                        "departure": {
-                            "date": "-".join(str(x) for x in leg.departure.date),
-                            "time": ":".join(f"{x:02d}" for x in leg.departure.time),
-                        },
-                        "arrival": {
-                            "date": "-".join(str(x) for x in leg.arrival.date),
-                            "time": ":".join(f"{x:02d}" for x in leg.arrival.time),
-                        },
-                        "duration_minutes": leg.duration,
-                        "plane_type": leg.plane_type,
-                    }
-                    for leg in f.flights
-                ],
-            }
-        )
+        try:
+            itineraries.append(
+                {
+                    "type": f.type,
+                    "price": f.price,
+                    "airlines": f.airlines,
+                    "carbon_emission_grams": getattr(f.carbon, "emission", None) if f.carbon else None,
+                    "legs": [_serialize_leg(leg) for leg in f.flights],
+                }
+            )
+        except Exception as e:
+            itineraries.append({"error": f"itinerary parse error: {e}"})
     meta = getattr(result, "metadata", None)
-    airlines_meta = [asdict(a) for a in meta.airlines] if meta else []
+    try:
+        airlines_meta = [asdict(a) for a in meta.airlines] if meta else []
+    except Exception:
+        airlines_meta = []
     return {"itineraries": itineraries, "count": len(itineraries), "airlines": airlines_meta}
 
 
